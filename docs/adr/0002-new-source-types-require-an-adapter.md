@@ -1,0 +1,5 @@
+# New Source Types require a developer-written Adapter
+
+The admin dashboard lets an admin add, pause, and archive **Sources**, but only of a **Source Type** that already has an **Adapter** in the worker (`reddit`, `bump`). Teaching the system a genuinely new format — an arbitrary blog or website — requires a developer to write a new Adapter and register it in `createAdapterForSource`. Admins cannot create Source Types from the UI.
+
+We deliberately rejected generic ingestion (auto-discovered RSS, stored CSS-selector config, or LLM-driven page extraction) because real-world post formats are too varied and unstable to generalize reliably right now; a wrong selector or hallucinated extraction silently poisons the pipeline. Per-Type Adapters keep ingestion deterministic and testable. The cost is that onboarding a new kind of site is a code change, not a config change — and the first dashboard version adds `reddit` Sources only, since the `bump` adapter is still hardwired to a single forum via the global `THEBUMP_BASE_URL`. A future change can move that base URL into per-Source `config` to make `bump` genuinely multi-forum.
