@@ -51,16 +51,14 @@ END;
 $$;
 
 -- pgmq_read(queue_name text, vt int, qty int) -> setof message rows
--- Shape must match PgmqMessage in apps/worker/src/queue/consumer.ts:
---   { msg_id, read_ct, enqueued_at, vt, message }
+-- Returns SETOF pgmq.message_record so the output columns come from pgmq's own
+-- composite type (msg_id, read_ct, enqueued_at, vt, message) rather than being
+-- declared here. Declaring an output column named `vt` would collide with the
+-- input parameter `vt` (PL/pgSQL error 42P13). The shape still matches
+-- PgmqMessage in apps/worker/src/queue/consumer.ts: { msg_id, read_ct,
+-- enqueued_at, vt, message }.
 CREATE OR REPLACE FUNCTION public.pgmq_read(queue_name text, vt integer, qty integer)
-RETURNS TABLE (
-  msg_id bigint,
-  read_ct integer,
-  enqueued_at timestamptz,
-  vt timestamptz,
-  message jsonb
-)
+RETURNS SETOF pgmq.message_record
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pgmq
