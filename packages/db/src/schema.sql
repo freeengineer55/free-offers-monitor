@@ -26,7 +26,7 @@ CREATE EXTENSION IF NOT EXISTS pg_cron;
 
 CREATE TABLE sources (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  type           text NOT NULL,                    -- 'reddit' | 'discourse'
+  type           text NOT NULL,                    -- 'reddit' | 'discourse' | 'bump'
   identifier     text NOT NULL UNIQUE,             -- subreddit name or base URL
   config         jsonb NOT NULL DEFAULT '{}',      -- polling config, auth config
   last_polled_at timestamptz,
