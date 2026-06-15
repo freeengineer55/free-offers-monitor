@@ -148,6 +148,9 @@ pg_dump "$OLD_DB_URL" \
 Notes:
 - The `offers.embedding` `vector(1024)` column dumps as a text literal and restores fine **because the `vector` extension already exists** on the new DB (§2.1). Don't skip that.
 - `--table` flags load in the order listed, which already respects the FK chain (sources → posts → offers → join/log/queue/ai_calls).
+- **`pg_dump` must match the server's major version.** Supabase runs Postgres 17; a v14/v15 `pg_dump` aborts with "server version mismatch." Use the matching client, e.g. `/opt/homebrew/opt/postgresql@17/bin/pg_dump`. Confirm with `psql "$OLD_DB_URL" -tAc 'select version();'`.
+- **Connection routing:** the direct `db.<ref>.supabase.co:5432` host (user `postgres`) is IPv6-only — fine if your network has IPv6. If not, use the Session pooler from the dashboard **Connect** dialog (user `postgres.<ref>`, host like `aws-1-<region>.pooler.supabase.com:5432`); the cluster prefix is **not** always `aws-0`, so copy it from the dialog rather than guessing. Use the **Session** pooler (5432), never the Transaction pooler (6543) — transaction mode breaks `pg_dump`.
+- **If the DB password has URL-special characters** (`/ : @ # ? & %` etc.), percent-encode them in the `postgresql://` string (`/`→`%2F`, `*`→`%2A`, `,`→`%2C`).
 
 ---
 
@@ -156,10 +159,13 @@ Notes:
 ```bash
 NEW_DB_URL='postgresql://postgres:<pwd>@db.<new-ref>.supabase.co:5432/postgres'
 
-psql "$NEW_DB_URL" -v ON_ERROR_STOP=1 -f fom-data.sql
+# Use the v17 psql — see note below.
+/opt/homebrew/opt/postgresql@17/bin/psql "$NEW_DB_URL" -v ON_ERROR_STOP=1 -f fom-data.sql
 ```
 
-If the restore errors on a FK violation, it almost always means table order — re-dump with the `--table` flags in the exact order in §4.
+- **The restore `psql` must be the same major version as the `pg_dump` that wrote the file.** A v17 dump begins with a `\restrict` directive that older `psql` (e.g. v14) rejects with `invalid command \restrict`, and with `ON_ERROR_STOP=1` the whole restore aborts at line 5 having inserted nothing. Run the restore with the v17 client.
+- Restore into an **empty** target. Verify `select count(*)` is 0 on all seven tables first (§2); a non-empty table means schema/seed was applied twice.
+- If the restore errors on a FK violation, it almost always means table order — re-dump with the `--table` flags in the exact order in §4.
 
 ---
 
