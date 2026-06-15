@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@repo/db';
@@ -171,9 +172,13 @@ async function main(): Promise<void> {
   const promptVersion = computePromptVersion();
   logger.info('prompt_version', { version: promptVersion });
 
-  // Load prompts from disk at startup — cached in memory for the process lifetime
-  const promptsDir =
-    process.env.PROMPTS_DIR ?? path.resolve(process.cwd(), 'prompts');
+  // Load prompts from disk at startup — cached in memory for the process lifetime.
+  // Resolve relative to this module (apps/worker/{src,dist}/index.* -> repo-root
+  // /prompts) so it works regardless of the process working directory — i.e. the
+  // worker can be started from the repo root or from apps/worker without the
+  // prompt files going missing. PROMPTS_DIR overrides for non-standard layouts.
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const promptsDir = process.env.PROMPTS_DIR ?? path.resolve(moduleDir, '../../../prompts');
 
   const tier1Prompt = readFileSync(path.join(promptsDir, 'tier1-classify.md'), 'utf-8');
   logger.info('prompts_loaded', { tier1_chars: tier1Prompt.length });

@@ -185,36 +185,43 @@ The `ivfflat` embedding index was created empty in §2 (by `schema.sql`); its ce
      (SELECT embedding FROM offers WHERE embedding IS NOT NULL LIMIT 1),
      0.85, 5);
    ```
-4. **Re-create dashboard auth users** — Authentication → Providers → Email: enable, disable signups. Then invite each email captured in §0.5.
+4. **Re-create dashboard auth users** — Authentication → Providers → Email: enable, **disable signups**. Then add each email captured in §0.5 via **Authentication → Users → Add user**, checking **"Auto Confirm User"** and setting a password.
+   - The dashboard logs in with **email + password** (`signInWithPassword` in `apps/dashboard/components/auth/login-form.tsx`). It has **no magic-link / invite-callback route**, so the "Invite user" flow dead-ends (the link redirects to the Site URL with a recovery token the app can't handle). Use "Add user + Auto Confirm + password" and hand credentials to each user.
+   - The allowlist is enforced a **second time** at the app layer via the `ALLOWED_EMAILS` env var (see §8) — adding the Supabase user is necessary but **not sufficient**; the email must also appear in `ALLOWED_EMAILS` or login is rejected with "Your account is not authorized."
 
 ---
 
 ## 7. Configure the new Supabase auth & cron (parity check)
 
-- Confirm `validation-daily-trigger` exists (`SELECT * FROM cron.job;`). It came from `schema.sql` in §2. If the old DB had **extra** cron jobs from §0.4 (e.g. a `validate-offers-daily` that sends to a validation queue), recreate them here.
-- The worker's 10-minute validation loop runs regardless of cron, so cron is a safety net — but match the old state for a faithful handoff.
+- Confirm `validation-daily-trigger` exists (`SELECT * FROM cron.job;`). It came from `schema.sql` in §2. Expect exactly that one row.
+- The old DB also had a `validate-offers-daily` cron that did `pgmq.send('validation_queue', …)` (§0.4). **Do not recreate it.** Nothing in the worker consumes `validation_queue` — `runValidationCycle` (`apps/worker/src/validation/validation-loop.ts`) queries the `offers` table directly for due offers. The cron + queue are orphaned dead state on the old DB (messages pile up unread); recreating them on the new DB would only reproduce that bug and trip the §9 "messages not piling up" check.
+- The worker's 10-minute validation loop is the real validation path and runs regardless of cron, so dropping the orphaned cron loses nothing.
 
 ---
 
 ## 8. Deploy worker and dashboard (first-time)
 
 ### Worker → Railway
-- New Project → Deploy from the **new** GitHub repo.
-- Root: `apps/worker` (or repo root with build `pnpm install --frozen-lockfile && pnpm build --filter worker`, start `pnpm --filter worker start`).
+- New Project → Deploy from the GitHub repo.
+- Build: `pnpm install --frozen-lockfile && pnpm build --filter worker`
+- Start: `pnpm --filter worker start` (runs `node dist/index.js`; the `start` script was added during this migration). Prompt loading is now resolved relative to the worker module, not the cwd, so it works from either the repo root or `apps/worker`.
 - Env vars:
   - `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY` — your existing keys.
   - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — from the **new** project (Settings → API).
   - `REDDIT_USER_AGENT` — leave as-is for now (`/u/Alternative-Owl-7042`); the new owner changes it in §10.
-  - `AXIOM_TOKEN`, `AXIOM_DATASET` (optional), `PORT=3001`.
-- Deploy. Tail logs for: `extensions_verified`, `dlq_queue_created` (×2), `health_endpoint_listening`, `worker_started`, then the four loops. A missing `pgmq_*` wrapper shows up here as an RPC error — if so, revisit §2.3.
+  - `AXIOM_TOKEN`, `AXIOM_DATASET`, `AXIOM_ORG_ID` — all three together, optional (Axiom logging; console-only if unset). `PORT=3001`.
+- Deploy. Tail logs for: `extensions_verified`, `prompts_loaded` (×2), `dlq_queue_created` (×2), `health_endpoint_listening`, `worker_started`, then the four loops. A missing `pgmq_*` wrapper shows up here as an RPC error — if so, revisit §2.3.
 
 ### Dashboard → Vercel
-- Import the **new** repo, root `apps/dashboard`, framework Next.js.
+- Import the repo, root `apps/dashboard`, framework Next.js.
 - Env (Production + Preview):
-  - `NEXT_PUBLIC_SUPABASE_URL` = new `SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_URL` = new project URL
   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` = new anon key
+  - `SUPABASE_URL` = new project URL — **required** in addition to the public one; `apps/dashboard/lib/actions/offers.ts` uses `@repo/db`'s service-role client, which reads the non-prefixed `SUPABASE_URL`.
   - `SUPABASE_SERVICE_ROLE_KEY` = new service role key
-- Deploy. Log in with an invited email; confirm `/dashboard/offers`, `/dashboard/review`, `/dashboard/ai-logs` render against migrated data.
+  - `ALLOWED_EMAILS` = comma-separated allowlist (the same emails added in §6.4, e.g. `a@x.com,b@y.com`). **Required** — `apps/dashboard/lib/actions/auth.ts` checks every authenticated user against this list and signs them out if absent. Without it, all logins are rejected.
+- In Supabase, set **Auth → URL Configuration → Site URL** to the Vercel domain (so password-reset emails redirect correctly).
+- Deploy. Log in with a §6.4 email + password; confirm `/dashboard/offers`, `/dashboard/review`, `/dashboard/ai-logs` render against migrated data.
 
 ---
 
@@ -263,4 +270,6 @@ Capturing these in the repo makes the system reproducible for the new owner inst
 
 - **`pgmq_*` RPC wrappers** (§0.2) are not in `schema.sql`. Commit them as `migrations/003_pgmq_rpc_wrappers.sql`.
 - **`schema.sql` `sources.type` comment** says `'reddit' | 'discourse'` but the real second type is `bump`. Fix the comment.
-- **`auth.users` allowlist** is environment state, not code — document the allowed emails in the handoff notes (not in git).
+- **`auth.users` allowlist** is environment state, not code — document the allowed emails in the handoff notes (not in git). Note the allowlist is enforced in **two** places that must agree: the Supabase user must exist (added via Add user + Auto Confirm + password, §6.4) **and** the email must be in the dashboard's `ALLOWED_EMAILS` env var (§8).
+- **Dashboard onboarding is password-only.** Login uses `signInWithPassword` and there is no invite/magic-link callback route. Add users with a password directly; the "Invite user" button does not work end to end. (Implementing an `/auth/callback` route is deferred feature work, not part of this migration.)
+- **Worker had no `start` script and resolved prompts via cwd.** Both fixed during this migration: `apps/worker` now has `start: node dist/index.js`, and prompt loading resolves relative to the module so it is cwd-independent.
